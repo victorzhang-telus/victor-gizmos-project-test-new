@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMB Mobile Phone Activations — MTD</title>
+  <script src="bq-auth-client.js"></script>
+  <script src="auth-gate.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #f6f7f9;
+      color: #1a1a1e;
+      min-height: 100vh;
+    }
+    header {
+      background: #4b2a6d;
+      color: #fff;
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.02em; }
+    #bi-layer-badge { display: none; flex-shrink: 0; padding-top: 4px; }
+    main { max-width: 860px; margin: 32px auto; padding: 0 16px; }
+    .card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #6b7280;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .kpi-total {
+      font-size: 48px;
+      font-weight: 800;
+      color: #4b2a6d;
+      line-height: 1.1;
+    }
+    .kpi-sub {
+      font-size: 13px;
+      color: #6b7280;
+      margin-top: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      color: #9ca3af;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0 12px 10px;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f3f4f6;
+      color: #374151;
+    }
+    tr:last-child td { border-bottom: none; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+    .bar-cell { width: 180px; }
+    .bar-wrap { background: #f3f4f6; border-radius: 4px; height: 8px; overflow: hidden; }
+    .bar-fill { background: #4b2a6d; height: 8px; border-radius: 4px; transition: width 0.4s; }
+    #status {
+      font-size: 13px;
+      color: #9ca3af;
+      text-align: center;
+      padding: 16px 0;
+    }
+    #refresh-btn {
+      display: block;
+      margin: 0 auto;
+      background: #4b2a6d;
+      color: #fff;
+      border: none;
+      padding: 9px 22px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    #refresh-btn:hover { filter: brightness(1.12); }
+    .filters {
+      font-size: 12px;
+      color: #9ca3af;
+      margin-top: 12px;
+    }
+    .filters span {
+      background: #f3f4f6;
+      border-radius: 4px;
+      padding: 2px 8px;
+      margin-right: 6px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SMB Mobile Phone Activations — MTD</h1>
+    <div id="bi-layer-badge"></div>
+  </header>
+  <main>
+    <div class="card">
+      <div class="card-title">MTD Gross Activations</div>
+      <div class="kpi-total" id="kpi-total">—</div>
+      <div class="kpi-sub" id="kpi-sub">Loading…</div>
+      <div class="filters" id="kpi-filters"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Daily Breakdown</div>
+      <div id="status">Waiting for sign-in…</div>
+      <table id="results-table" style="display:none;">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th style="text-align:right;">Gross Activations</th>
+            <th class="bar-cell"></th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+    <div style="text-align:center;">
+      <button id="refresh-btn" style="display:none;" onclick="loadData()">Refresh</button>
+    </div>
+  </main>
+
+  <script>
+    var BQ_QUERY_URL = '';
+    var S_ACTIVE_LAYER = null;
+
+    var MTD_SQL = [
+      "SELECT DATE(activity_date) AS date, SUM(gross_activations_dere) AS gross_activations",
+      "FROM `bi-srv-tbs-tbmbi-pr-fc0a62.bus_rgu_revenue.wls_tbs_kpi_master_rpt`",
+      "WHERE activity_date >= DATE_TRUNC(CURRENT_DATE(), MONTH)",
+      "  AND activity_date < CURRENT_DATE()",
+      "  AND external_rpt = 'MOBILE PHONE'",
+      "  AND segment_rollup_2_cur = 'SMB'",
+      "GROUP BY 1 ORDER BY 1"
+    ].join("\n");
+
+    /* ====================== BI LAYER SETUP ====================== */
+    var ADMIN_EMAIL = '';
+    var S_ACTIVE_LAYER = null;
+
+    function showBILayerBadge(label, userEmail, isAdmin, globalLayers) {
+      var badge = document.getElementById('bi-layer-badge');
+      if (!badge) return;
+      isAdmin = isAdmin || (userEmail === ADMIN_EMAIL);
+      globalLayers = globalLayers || [];
+      var noAccess = (label === 'No Access' || label === 'Not Set');
+      var dotColor  = noAccess ? '#c00'    : '#2e7d32';
+      var bgColor   = noAccess ? '#fff0f0' : 'rgba(255,255,255,0.15)';
+      var borderClr = noAccess ? '#f5a5a5' : 'rgba(255,255,255,0.3)';
+      var textColor = noAccess ? '#c00'    : '#fff';
+      badge.style.display = 'flex';
+      badge.innerHTML =
+        '<div style="display:inline-flex;align-items:center;gap:6px;background:' + bgColor + ';border:1px solid ' + borderClr + ';border-radius:20px;padding:5px 12px 5px 10px;">'
+        + '<div style="width:8px;height:8px;background:' + dotColor + ';border-radius:50%;flex-shrink:0;"></div>'
+        + '<span style="font-size:11px;font-weight:600;color:' + textColor + ';white-space:nowrap;letter-spacing:0.02em;">BI Layer: ' + label + '</span>'
+        + '<button id="layer-change-btn" title="Change BI Layer" style="background:none;border:none;cursor:pointer;padding:0 0 0 2px;font-size:13px;color:#fff;line-height:1;opacity:0.7;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">✎</button>'
+        + (isAdmin ? '<button id="admin-gear-btn" title="Admin: Manage BI Layers" style="background:none;border:none;cursor:pointer;padding:0 0 0 2px;font-size:14px;color:#fff;line-height:1;">⚙</button>' : '')
+        + '</div>';
+      badge.querySelector('#layer-change-btn').onclick = function() {
+        BQAuthGate.ready().then(function(t) { showBILayerPicker(t, globalLayers, isAdmin); });
+      };
+      if (isAdmin) badge.querySelector('#admin-gear-btn').onclick = showAdminModal;
+    }
+
+    function showBILayerPicker(token, globalLayers, isAdmin) {
+      return new Promise(function(resolve) {
+        var overlay = document.createElement('div');
+        overlay.id = 'bi-picker-overlay';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+        var hasGlobal = globalLayers.length > 0;
+        var optionsHTML = globalLayers.map(function(l, i) {
+          return '<option value="' + i + '">' + l.label + '  —  ' + l.project_id + '</option>';
+        }).join('') + '<option value="custom">+ Enter a custom project ID…</option>';
+        overlay.innerHTML =
+          '<div style="background:white;border-radius:8px;padding:28px;max-width:500px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3);">'
+          + '<h3 style="margin:0 0 6px;font-size:17px;color:#333;font-weight:700;">Choose Your BI Layer</h3>'
+          + '<p style="margin:0 0 18px;font-size:13px;color:#666;line-height:1.5;">Select the BigQuery project your account has access to. Your choice is saved and remembered on future logins.</p>'
+          + '<div style="margin-bottom:14px;">'
+          + '<label style="display:block;font-size:11px;font-weight:700;color:#666;letter-spacing:0.06em;margin-bottom:6px;">SELECT BI LAYER</label>'
+          + (hasGlobal
+              ? '<select id="layer-sel" style="width:100%;padding:9px 10px;border:1px solid #ccc;border-radius:4px;font-size:13px;background:white;">' + optionsHTML + '</select>'
+              : '<p style="font-size:12px;color:#aaa;font-style:italic;margin:0 0 8px;">No global layers configured yet. Enter a custom project ID below.</p>')
+          + '</div>'
+          + '<div id="custom-inputs" style="' + (hasGlobal ? 'display:none;' : '') + 'margin-bottom:14px;">'
+          + '<label style="display:block;font-size:11px;font-weight:700;color:#666;letter-spacing:0.06em;margin-bottom:6px;">CUSTOM PROJECT</label>'
+          + '<div style="display:flex;gap:8px;">'
+          + '<input id="custom-pid" type="text" placeholder="Project ID" style="flex:2;padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:12px;font-family:monospace;">'
+          + '<input id="custom-lbl" type="text" placeholder="Label" style="flex:1;padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:12px;">'
+          + '</div>'
+          + '</div>'
+          + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;">'
+          + '<button id="layer-skip" style="background:none;border:1px solid #ccc;color:#666;padding:8px 16px;border-radius:4px;font-size:12px;cursor:pointer;">Skip for now</button>'
+          + '<button id="layer-save" style="background:#2e7d32;color:white;border:none;padding:9px 22px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Save &amp; Continue</button>'
+          + '</div>'
+          + '<div id="layer-status" style="margin-top:10px;font-size:12px;min-height:16px;"></div>'
+          + '</div>';
+        document.body.appendChild(overlay);
+        var sel = overlay.querySelector('#layer-sel');
+        var customDiv = overlay.querySelector('#custom-inputs');
+        if (sel) sel.onchange = function() { customDiv.style.display = this.value === 'custom' ? 'block' : 'none'; };
+        overlay.querySelector('#layer-skip').onclick = function() {
+          overlay.remove();
+          showBILayerBadge('Not Set', token.email, isAdmin, globalLayers);
+          resolve();
+        };
+        overlay.querySelector('#layer-save').onclick = async function() {
+          var status = overlay.querySelector('#layer-status');
+          var chosen;
+          var useCustom = !sel || sel.value === 'custom';
+          if (useCustom) {
+            var pid = (overlay.querySelector('#custom-pid').value || '').trim();
+            var lbl = (overlay.querySelector('#custom-lbl').value || '').trim() || pid;
+            if (!pid) { status.innerHTML = '<span style="color:#c00;">Project ID is required.</span>'; return; }
+            chosen = { project_id: pid, label: lbl };
+          } else {
+            chosen = globalLayers[parseInt(sel.value, 10)];
+          }
+          status.innerHTML = '<span style="color:#888;">Saving…</span>';
+          try {
+            var r = await fetch('/api/user/bi-layer', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(chosen)
+            });
+            var d = await r.json();
+            if (!d.ok) throw new Error(d.error || 'Save failed');
+            BQ_QUERY_URL = 'https://bigquery.googleapis.com/bigquery/v2/projects/' + chosen.project_id + '/queries';
+            S_ACTIVE_LAYER = chosen;
+            overlay.remove();
+            showBILayerBadge(chosen.label, token.email, isAdmin, globalLayers);
+          } catch(e) {
+            status.innerHTML = '<span style="color:#c00;">Error: ' + e.message + '</span>';
+          }
+          resolve();
+        };
+      });
+    }
+
+    async function showAdminModal() {
+      var whitelistData = {}, userLayersData = {};
+      try {
+        var responses = await Promise.all([fetch('/api/admin/bi-layers'), fetch('/api/admin/user-layers')]);
+        whitelistData = responses[0].ok ? await responses[0].json() : {};
+        userLayersData = responses[1].ok ? await responses[1].json() : {};
+      } catch(e) {}
+      var layers = (whitelistData.bi_layers || []).slice();
+      var userLayers = (userLayersData.user_layers || []).slice();
+      var overlay = document.createElement('div');
+      overlay.id = 'admin-overlay';
+      overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+      function renderWhitelist() {
+        if (!layers.length) return '<p style="color:#aaa;font-size:13px;font-style:italic;margin:0;">No layers configured.</p>';
+        return layers.map(function(l, i) {
+          return '<div style="display:flex;align-items:center;gap:8px;padding:10px;background:#f9f9f9;border:1px solid #eee;border-radius:4px;margin-bottom:6px;">'
+            + '<div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:#333;">' + l.label + '</div>'
+            + '<div style="font-size:11px;color:#888;font-family:monospace;">' + l.project_id + '</div></div>'
+            + '<button data-idx="' + i + '" class="bi-del-btn" style="background:#fff;border:1px solid #f5a5a5;color:#c00;padding:4px 10px;border-radius:4px;font-size:12px;cursor:pointer;">Remove</button>'
+            + '</div>';
+        }).join('');
+      }
+      function renderUserLayers() {
+        if (!userLayers.length) return '<p style="color:#aaa;font-size:13px;font-style:italic;margin:0;">No users have saved a BI layer yet.</p>';
+        return userLayers.map(function(u) {
+          return '<div style="display:flex;align-items:center;gap:8px;padding:10px;background:#f9f9f9;border:1px solid #eee;border-radius:4px;margin-bottom:6px;">'
+            + '<div style="width:8px;height:8px;background:#2e7d32;border-radius:50%;flex-shrink:0;"></div>'
+            + '<div style="flex:1;min-width:0;"><div style="font-size:12px;font-weight:600;color:#333;">' + u.email + '</div>'
+            + '<div style="font-size:11px;color:#666;">' + u.label + ' <span style="color:#aaa;font-family:monospace;">(' + u.project_id + ')</span></div></div>'
+            + '</div>';
+        }).join('');
+      }
+      function rebindDelete() {
+        overlay.querySelectorAll('.bi-del-btn').forEach(function(btn) {
+          btn.onclick = function() {
+            layers.splice(parseInt(this.getAttribute('data-idx'), 10), 1);
+            overlay.querySelector('#admin-list').innerHTML = renderWhitelist();
+            rebindDelete();
+          };
+        });
+      }
+      overlay.innerHTML =
+        '<div style="background:white;border-radius:8px;padding:24px;max-width:580px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3);max-height:90vh;overflow-y:auto;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
+        + '<h3 style="margin:0;font-size:16px;color:#333;">⚙ Admin — BI Layer Whitelist</h3>'
+        + '<button id="admin-modal-close" style="background:none;border:none;font-size:22px;cursor:pointer;color:#aaa;line-height:1;">✕</button>'
+        + '</div>'
+        + '<p style="font-size:13px;color:#666;margin:0 0 14px;">Layers listed here appear in the picker shown to all users at first login.</p>'
+        + '<div style="font-size:11px;font-weight:700;color:#999;letter-spacing:0.06em;margin-bottom:8px;">GLOBAL WHITELIST</div>'
+        + '<div id="admin-list">' + renderWhitelist() + '</div>'
+        + '<div style="display:flex;gap:8px;margin-top:10px;margin-bottom:10px;">'
+        + '<input id="admin-new-id" type="text" placeholder="Project ID" style="flex:2;padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:12px;font-family:monospace;">'
+        + '<input id="admin-new-label" type="text" placeholder="Label" style="flex:1.5;padding:7px 10px;border:1px solid #ccc;border-radius:4px;font-size:12px;">'
+        + '</div>'
+        + '<button id="admin-add-btn" style="background:#4b2a6d;color:white;border:none;padding:7px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;">+ Add to Whitelist</button>'
+        + '<hr style="margin:20px 0;border:none;border-top:1px solid #eee;">'
+        + '<div style="font-size:11px;font-weight:700;color:#999;letter-spacing:0.06em;margin-bottom:8px;">USER SELECTIONS (' + userLayers.length + ')</div>'
+        + '<div id="user-layers-list">' + renderUserLayers() + '</div>'
+        + '<hr style="margin:16px 0;border:none;border-top:1px solid #eee;">'
+        + '<div style="display:flex;justify-content:flex-end;">'
+        + '<button id="admin-save-btn" style="background:#2e7d32;color:white;border:none;padding:9px 20px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">Save Whitelist</button>'
+        + '</div>'
+        + '<div id="admin-save-status" style="margin-top:10px;font-size:12px;min-height:18px;"></div>'
+        + '</div>';
+      document.body.appendChild(overlay);
+      rebindDelete();
+      overlay.querySelector('#admin-modal-close').onclick = function() { overlay.remove(); };
+      overlay.querySelector('#admin-add-btn').onclick = function() {
+        var pid = (overlay.querySelector('#admin-new-id').value || '').trim();
+        var lbl = (overlay.querySelector('#admin-new-label').value || '').trim() || pid;
+        if (!pid) { alert('Project ID is required.'); return; }
+        layers.push({ project_id: pid, label: lbl });
+        overlay.querySelector('#admin-list').innerHTML = renderWhitelist();
+        rebindDelete();
+        overlay.querySelector('#admin-new-id').value = '';
+        overlay.querySelector('#admin-new-label').value = '';
+      };
+      overlay.querySelector('#admin-save-btn').onclick = async function() {
+        var status = overlay.querySelector('#admin-save-status');
+        status.innerHTML = '<span style="color:#888;">Saving…</span>';
+        try {
+          var r = await fetch('/api/admin/bi-layers', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bi_layers: layers })
+          });
+          var d = await r.json();
+          status.innerHTML = d.ok
+            ? '<span style="color:#2e7d32;">✓ Saved. New users will see the updated list.</span>'
+            : '<span style="color:#c00;">Error: ' + (d.error || 'Unknown') + '</span>';
+        } catch(e) { status.innerHTML = '<span style="color:#c00;">Save failed: ' + e.message + '</span>'; }
+      };
+    }
+
+    async function initBILayer() {
+      var token = await BQAuthGate.ready();
+      var isAdmin = false;
+      var globalLayers = [];
+      try {
+        var lRes = await fetch('/api/admin/bi-layers');
+        if (lRes.ok) { var ld = await lRes.json(); globalLayers = ld.bi_layers || []; isAdmin = ld.isAdmin || false; }
+      } catch(e) {}
+      var savedLayer = null;
+      try {
+        var sRes = await fetch('/api/user/bi-layer');
+        if (sRes.ok) { var sd = await sRes.json(); if (sd && sd.project_id) savedLayer = sd; }
+      } catch(e) {}
+      if (savedLayer) {
+        BQ_QUERY_URL = 'https://bigquery.googleapis.com/bigquery/v2/projects/' + savedLayer.project_id + '/queries';
+        S_ACTIVE_LAYER = savedLayer;
+        showBILayerBadge(savedLayer.label, token.email, isAdmin, globalLayers);
+      } else {
+        await showBILayerPicker(token, globalLayers, isAdmin);
+      }
+    }
+    /* =========================================================== */
+
+    async function runQuery(sql, token) {
+      if (!S_ACTIVE_LAYER) throw new Error('No BI layer selected');
+      var doFetch = function(t) {
+        return fetch('/api/query', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + t.accessToken, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql: sql, project: S_ACTIVE_LAYER.project_id })
+        });
+      };
+      var res = await doFetch(token);
+      if (res.status === 401) {
+        token = await BQAuthGate.reauth();
+        res = await doFetch(token);
+      }
+      var data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'BigQuery error (' + res.status + ')');
+      return data.rows || [];
+    }
+
+    async function loadData() {
+      var status = document.getElementById('status');
+      var table = document.getElementById('results-table');
+      var tbody = document.getElementById('results-body');
+      var kpiTotal = document.getElementById('kpi-total');
+      var kpiSub = document.getElementById('kpi-sub');
+      var kpiFilters = document.getElementById('kpi-filters');
+      var refreshBtn = document.getElementById('refresh-btn');
+
+      status.textContent = 'Loading…';
+      table.style.display = 'none';
+      refreshBtn.style.display = 'none';
+      kpiTotal.textContent = '—';
+      kpiSub.textContent = 'Loading…';
+
+      try {
+        var token = await BQAuthGate.ready();
+        var rows = await runQuery(MTD_SQL, token);
+
+        if (!rows.length) {
+          status.textContent = 'No data found for current MTD.';
+          kpiTotal.textContent = '0';
+          kpiSub.textContent = 'No activations recorded yet this month.';
+          refreshBtn.style.display = 'block';
+          return;
+        }
+
+        var total = rows.reduce(function(s, r) { return s + Number(r.gross_activations); }, 0);
+        var maxVal = Math.max.apply(null, rows.map(function(r) { return Number(r.gross_activations); }));
+        var today = new Date();
+        var monthName = today.toLocaleString('en-CA', { month: 'long' });
+
+        kpiTotal.textContent = total.toLocaleString();
+        kpiSub.textContent = monthName + ' ' + today.getFullYear() + ' MTD — ' + rows.length + ' days';
+        kpiFilters.innerHTML = 'Filters: <span>SMB</span><span>Mobile Phone</span><span>Gross Activations (DERE)</span>';
+
+        tbody.innerHTML = rows.map(function(r) {
+          var val = Number(r.gross_activations);
+          var pct = maxVal > 0 ? (val / maxVal * 100).toFixed(1) : 0;
+          var dateStr = new Date(r.date + 'T00:00:00').toLocaleDateString('en-CA', { month: 'short', day: 'numeric', weekday: 'short' });
+          return '<tr>'
+            + '<td>' + dateStr + '</td>'
+            + '<td class="num">' + val.toLocaleString() + '</td>'
+            + '<td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:' + pct + '%"></div></div></td>'
+            + '</tr>';
+        }).join('');
+
+        status.textContent = '';
+        table.style.display = 'table';
+        refreshBtn.style.display = 'block';
+      } catch(e) {
+        status.textContent = 'Error: ' + e.message;
+        refreshBtn.style.display = 'block';
+      }
+    }
+
+    (async function() {
+      try {
+        await BQAuthGate.ready();
+        await initBILayer();
+        await loadData();
+      } catch(e) {
+        document.getElementById('status').textContent = 'Startup error: ' + e.message;
+      }
+    })();
+  </script>
+</body>
+</html>

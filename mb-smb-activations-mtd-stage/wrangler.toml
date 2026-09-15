@@ -1,0 +1,13 @@
+name = "mb-smb-activations-mtd"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+ADMIN_EMAILS = ""
+BI_LAYERS = "bi-srv-tbs-tbmbi-pr-fc0a62|SMB-MM BI Layer, bi-srv-tbs-cmrcl-pr-e9a709|EPB PROD, bi-srv-fbi-pr-3e544f|bi-srv-fbi-pr, bi-srv-cio-datahub-pr-ebec1f|BI Datahub"
+BQ_LOCATION = "northamerica-northeast1"
+MAX_ROWS = "200"
+BQ_AUTH_URL = "https://bq-auth.telus.gizmos.run"
+
+[[kv_namespaces]]
+binding = "ADMIN_CONFIG"
