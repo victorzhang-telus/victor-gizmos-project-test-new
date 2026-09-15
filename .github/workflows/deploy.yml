@@ -1,0 +1,40 @@
+name: Deploy to Gizmos
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  APP: ${{ github.event.repository.name }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ github.event.repository.name }}.telus.gizmos.run
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22        # no cache: — there is no lockfile
+
+      - name: Fetch gizmos CLI
+        run: curl -fsSL https://gizmos.run/skills/gizmos.mjs -o /tmp/gizmos.mjs
+
+      - name: Deploy to Gizmos
+        env:
+          GIZMOS_API_KEY: ${{ secrets.GIZMOS_API_KEY }}
+          GIZMOS_URL: https://gizmos.run
+        run: node /tmp/gizmos.mjs push . --app "$APP" --org telus -m "gh-${GITHUB_SHA::7}"
